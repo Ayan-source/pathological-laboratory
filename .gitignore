@@ -41,7 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 # prisma
-/app/generated/prisma
+/src/app/generated/prisma
 /prisma/generated
 
 # editor / IDE
@@ -61,6 +61,3 @@ desktop.ini
 .agents/
 skills-lock.json
 
-pathologival-lootorary12345
-
-prd.md

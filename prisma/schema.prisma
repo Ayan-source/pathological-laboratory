@@ -1,13 +1,768 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
+// Pathology Laboratory Information & Management System (LIS)
+// Schema source: prd.md §27 (Core Prisma Data Model) + approved deltas:
+//   1. Permission + RolePermission  (PRD RBAC-002 — permissions were missing from §27 schema)
+//   2. Sample.rejectedById/rejectedAt (PRD SAMPLE-005 — "Rejected By / Rejected At")
+//   3. LabOrder.discount            (PRD ORDER-001 — discount applied at order level)
 
 generator client {
   provider = "prisma-client"
-  output   = "../app/generated/prisma"
+  output   = "../src/app/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+//
+// ENUMS
+//
+
+enum UserStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNKNOWN
+}
+
+enum OrderStatus {
+  REGISTERED
+  SAMPLE_PENDING
+  SAMPLE_COLLECTED
+  PROCESSING
+  RESULT_PENDING
+  VERIFICATION_PENDING
+  VERIFIED
+  REPORT_GENERATED
+  COMPLETED
+  CANCELLED
+}
+
+enum SampleStatus {
+  PENDING
+  COLLECTED
+  RECEIVED
+  PROCESSING
+  COMPLETED
+  REJECTED
+}
+
+enum ResultStatus {
+  DRAFT
+  SUBMITTED
+  VERIFICATION_PENDING
+  REJECTED
+  VERIFIED
+}
+
+enum ResultValueType {
+  NUMERIC
+  TEXT
+  BOOLEAN
+  OPTION
+}
+
+enum AbnormalFlag {
+  LOW
+  HIGH
+  NORMAL
+  CRITICAL
+  NONE
+}
+
+enum ReportStatus {
+  DRAFT
+  GENERATED
+  VERIFIED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  ONLINE
+  OTHER
+}
+
+enum InventoryTransactionType {
+  PURCHASE
+  CONSUMPTION
+  DAMAGE
+  EXPIRY
+  RETURN
+  ADJUSTMENT
+}
+
+enum PurchaseStatus {
+  DRAFT
+  RECEIVED
+  CANCELLED
+}
+
+enum UserRole {
+  ADMIN
+  RECEPTIONIST
+  TECHNICIAN
+  PATHOLOGIST
+  INVENTORY_MANAGER
+}
+
+enum DataType {
+  NUMERIC
+  TEXT
+  BOOLEAN
+  OPTION
+}
+
+//
+// USERS / RBAC
+//
+
+model UserProfile {
+  id        String     @id @default(uuid())
+  authId    String     @unique
+  name      String
+  email     String     @unique
+  phone     String?
+  role      UserRole
+  status    UserStatus @default(ACTIVE)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  ordersCreated          LabOrder[]             @relation("OrderCreatedBy")
+  samplesCollected       Sample[]               @relation("SampleCollectedBy")
+  samplesReceived        Sample[]               @relation("SampleReceivedBy")
+  samplesRejected        Sample[]               @relation("SampleRejectedBy")
+  resultsEntered         Result[]               @relation("ResultEnteredBy")
+  resultsVerified        Result[]               @relation("ResultVerifiedBy")
+  reportsGenerated       Report[]               @relation("ReportGeneratedBy")
+  reportPrints           ReportPrintLog[]
+  payments               Payment[]
+  inventoryTransactions  InventoryTransaction[]
+  purchases              Purchase[]
+  auditLogs              AuditLog[]
+
+  @@index([role])
+  @@index([status])
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String?
+
+  createdAt DateTime @default(now())
+
+  roles RolePermission[]
+
+  @@index([code])
+}
+
+model RolePermission {
+  id           String     @id @default(uuid())
+  role         UserRole
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([role, permissionId])
+  @@index([role])
+}
+
+//
+// PATIENT
+//
+
+model Patient {
+  id            String   @id @default(uuid())
+  patientNumber String   @unique
+
+  firstName     String
+  lastName      String?
+  dateOfBirth   DateTime?
+  gender        Gender   @default(UNKNOWN)
+
+  phone         String?
+  email         String?
+  cnic          String?
+  address       String?
+  notes         String?
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  orders        LabOrder[]
+
+  @@index([firstName, lastName])
+  @@index([phone])
+  @@index([cnic])
+}
+
+//
+// TEST CATALOG
+//
+
+model TestCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tests       Test[]
+}
+
+model Test {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  name              String
+  description       String?
+
+  categoryId        String
+  category          TestCategory @relation(fields: [categoryId], references: [id])
+
+  price             Decimal  @db.Decimal(12, 2)
+  sampleType        String
+  turnaroundMinutes Int?
+
+  isActive          Boolean  @default(true)
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  parameters        TestParameter[]
+  orderItems        LabOrderItem[]
+  results           Result[]
+
+  @@index([categoryId])
+  @@index([name])
+  @@index([isActive])
+}
+
+model TestParameter {
+  id          String   @id @default(uuid())
+
+  testId      String
+  test        Test     @relation(fields: [testId], references: [id], onDelete: Cascade)
+
+  code        String
+  name        String
+  unit        String?
+  dataType    DataType @default(TEXT)
+
+  displayOrder Int
+
+  isRequired  Boolean  @default(true)
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  referenceRanges ReferenceRange[]
+  resultValues    ResultValue[]
+
+  @@unique([testId, code])
+  @@index([testId])
+}
+
+model ReferenceRange {
+  id          String   @id @default(uuid())
+
+  parameterId String
+  parameter   TestParameter @relation(fields: [parameterId], references: [id], onDelete: Cascade)
+
+  gender      Gender?
+  minAge      Decimal? @db.Decimal(8, 2)
+  maxAge      Decimal? @db.Decimal(8, 2)
+
+  minValue    Decimal? @db.Decimal(12, 4)
+  maxValue    Decimal? @db.Decimal(12, 4)
+
+  textValue   String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([parameterId])
+}
+
+//
+// ORDERS
+//
+
+model LabOrder {
+  id          String      @id @default(uuid())
+  orderNumber String      @unique
+
+  patientId   String
+  patient     Patient     @relation(fields: [patientId], references: [id])
+
+  status      OrderStatus @default(REGISTERED)
+
+  discount    Decimal     @default(0) @db.Decimal(12, 2)
+
+  createdById  String
+  createdBy    UserProfile @relation("OrderCreatedBy", fields: [createdById], references: [id])
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  items        LabOrderItem[]
+  samples      Sample[]
+  results      Result[]
+  invoice      Invoice?
+  reports      Report[]
+
+  @@index([patientId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model LabOrderItem {
+  id          String   @id @default(uuid())
+
+  orderId     String
+  order       LabOrder @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  testId      String
+  test        Test     @relation(fields: [testId], references: [id])
+
+  quantity    Int      @default(1)
+
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  discount    Decimal  @default(0) @db.Decimal(12, 2)
+  total       Decimal  @db.Decimal(12, 2)
+
+  createdAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@index([testId])
+}
+
+//
+// SAMPLES
+//
+
+model Sample {
+  id          String       @id @default(uuid())
+  sampleNumber String      @unique
+
+  orderId     String
+  order       LabOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  sampleType  String
+  status      SampleStatus @default(PENDING)
+
+  collectedAt DateTime?
+  collectedById String?
+  collectedBy UserProfile? @relation("SampleCollectedBy", fields: [collectedById], references: [id])
+
+  receivedAt  DateTime?
+  receivedById String?
+  receivedBy  UserProfile? @relation("SampleReceivedBy", fields: [receivedById], references: [id])
+
+  rejectedAt    DateTime?
+  rejectedById  String?
+  rejectedBy    UserProfile? @relation("SampleRejectedBy", fields: [rejectedById], references: [id])
+
+  rejectionReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([status])
+}
+
+//
+// RESULTS
+//
+
+model Result {
+  id          String       @id @default(uuid())
+
+  orderId     String
+  order       LabOrder     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  testId      String
+  test        Test         @relation(fields: [testId], references: [id])
+
+  status      ResultStatus @default(DRAFT)
+
+  enteredById String?
+  enteredBy  UserProfile? @relation("ResultEnteredBy", fields: [enteredById], references: [id])
+
+  verifiedById String?
+  verifiedBy UserProfile? @relation("ResultVerifiedBy", fields: [verifiedById], references: [id])
+
+  submittedAt DateTime?
+  verifiedAt  DateTime?
+
+  rejectionReason String?
+  verificationNote String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  values ResultValue[]
+
+  @@unique([orderId, testId])
+  @@index([status])
+  @@index([orderId])
+}
+
+model ResultValue {
+  id          String   @id @default(uuid())
+
+  resultId    String
+  result      Result   @relation(fields: [resultId], references: [id], onDelete: Cascade)
+
+  parameterId String
+  parameter   TestParameter @relation(fields: [parameterId], references: [id])
+
+  value       String
+  numericValue Decimal? @db.Decimal(16, 6)
+
+  abnormalFlag AbnormalFlag @default(NONE)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([resultId, parameterId])
+  @@index([resultId])
+}
+
+//
+// BILLING
+//
+
+model Invoice {
+  id            String        @id @default(uuid())
+  invoiceNumber String        @unique
+
+  orderId       String        @unique
+  order         LabOrder      @relation(fields: [orderId], references: [id])
+
+  subtotal      Decimal       @db.Decimal(12, 2)
+  discount      Decimal       @default(0) @db.Decimal(12, 2)
+  tax           Decimal       @default(0) @db.Decimal(12, 2)
+  total         Decimal       @db.Decimal(12, 2)
+
+  paidAmount    Decimal       @default(0) @db.Decimal(12, 2)
+  balance       Decimal       @db.Decimal(12, 2)
+
+  paymentStatus PaymentStatus @default(UNPAID)
+
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  payments      Payment[]
+}
+
+model Payment {
+  id          String        @id @default(uuid())
+
+  invoiceId   String
+  invoice     Invoice       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  amount      Decimal       @db.Decimal(12, 2)
+  method      PaymentMethod
+
+  receivedById String
+  receivedBy   UserProfile  @relation(fields: [receivedById], references: [id])
+
+  notes       String?
+
+  createdAt   DateTime      @default(now())
+
+  @@index([invoiceId])
+  @@index([createdAt])
+}
+
+//
+// REPORTS
+//
+
+model Report {
+  id           String       @id @default(uuid())
+  reportNumber String       @unique
+
+  orderId      String
+  order        LabOrder     @relation(fields: [orderId], references: [id])
+
+  status       ReportStatus @default(DRAFT)
+
+  generatedById String?
+  generatedBy UserProfile? @relation("ReportGeneratedBy", fields: [generatedById], references: [id])
+
+  generatedAt DateTime?
+
+  currentVersion Int @default(1)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  versions ReportVersion[]
+  printLogs ReportPrintLog[]
+
+  @@index([orderId])
+  @@index([status])
+}
+
+model ReportVersion {
+  id        String @id @default(uuid())
+
+  reportId  String
+  report    Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  version   Int
+  filePath  String
+
+  createdAt DateTime @default(now())
+
+  @@unique([reportId, version])
+}
+
+model ReportPrintLog {
+  id        String @id @default(uuid())
+
+  reportId String
+  report   Report @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  printedById String
+  printedBy UserProfile @relation(fields: [printedById], references: [id])
+
+  printedAt DateTime @default(now())
+
+  @@index([reportId])
+  @@index([printedAt])
+}
+
+//
+// INVENTORY
+//
+
+model InventoryItem {
+  id           String   @id @default(uuid())
+  code         String   @unique
+
+  name         String
+  category     String?
+  unit         String
+
+  minimumStock Decimal  @default(0) @db.Decimal(12, 3)
+
+  isActive     Boolean  @default(true)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  batches      InventoryBatch[]
+  transactions InventoryTransaction[]
+  purchaseItems PurchaseItem[]
+}
+
+model InventoryBatch {
+  id          String   @id @default(uuid())
+
+  itemId      String
+  item        InventoryItem @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  batchNumber String
+  expiryDate  DateTime?
+
+  quantity    Decimal  @db.Decimal(12, 3)
+  unitCost    Decimal  @db.Decimal(12, 2)
+
+  supplierId  String?
+  supplier    Supplier? @relation(fields: [supplierId], references: [id])
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  transactions InventoryTransaction[]
+
+  @@unique([itemId, batchNumber])
+  @@index([expiryDate])
+}
+
+model InventoryTransaction {
+  id          String   @id @default(uuid())
+
+  itemId      String
+  item        InventoryItem @relation(fields: [itemId], references: [id])
+
+  batchId     String?
+  batch       InventoryBatch? @relation(fields: [batchId], references: [id])
+
+  type        InventoryTransactionType
+
+  quantity    Decimal  @db.Decimal(12, 3)
+
+  reason      String?
+
+  createdById String
+  createdBy   UserProfile @relation(fields: [createdById], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@index([itemId])
+  @@index([batchId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+//
+// SUPPLIERS
+//
+
+model Supplier {
+  id          String   @id @default(uuid())
+
+  name        String
+  contactName String?
+  phone       String?
+  email       String?
+  address     String?
+  notes       String?
+
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  purchases  Purchase[]
+  batches    InventoryBatch[]
+}
+
+//
+// PURCHASES
+//
+
+model Purchase {
+  id            String         @id @default(uuid())
+  purchaseNumber String        @unique
+
+  supplierId    String
+  supplier      Supplier       @relation(fields: [supplierId], references: [id])
+
+  status        PurchaseStatus @default(DRAFT)
+
+  totalAmount   Decimal        @default(0) @db.Decimal(12, 2)
+
+  createdById   String
+  createdBy     UserProfile    @relation(fields: [createdById], references: [id])
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  items         PurchaseItem[]
+}
+
+model PurchaseItem {
+  id          String   @id @default(uuid())
+
+  purchaseId  String
+  purchase    Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  inventoryItemId String
+  inventoryItem InventoryItem @relation(fields: [inventoryItemId], references: [id])
+
+  batchNumber String
+  expiryDate  DateTime?
+
+  quantity    Decimal  @db.Decimal(12, 3)
+  unitCost    Decimal  @db.Decimal(12, 2)
+  total       Decimal  @db.Decimal(12, 2)
+
+  @@index([purchaseId])
+}
+
+//
+// ADMIN / CONFIGURATION
+//
+
+model ReportTemplate {
+  id          String   @id @default(uuid())
+
+  name        String
+  description String?
+
+  configuration Json
+
+  isDefault   Boolean  @default(false)
+  isActive    Boolean  @default(true)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model LabSettings {
+  id          String   @id @default(uuid())
+
+  labName     String
+  logoPath    String?
+
+  address     String?
+  phone       String?
+  email       String?
+  website     String?
+
+  currency    String   @default("PKR")
+
+  patientPrefix String @default("PT-")
+  orderPrefix   String @default("LAB-")
+  invoicePrefix String @default("INV-")
+  reportPrefix  String @default("REP-")
+  samplePrefix  String @default("SMP-")
+
+  requirePaymentBeforeReport Boolean @default(false)
+  requireVerification         Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+//
+// AUDIT
+//
+
+model AuditLog {
+  id        String   @id @default(uuid())
+
+  userId    String?
+  user      UserProfile? @relation(fields: [userId], references: [id])
+
+  action    String
+  entity    String
+  entityId  String?
+
+  oldData   Json?
+  newData   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([action])
+  @@index([entity])
+  @@index([entityId])
+  @@index([createdAt])
 }
