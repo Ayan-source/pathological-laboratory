@@ -39,3 +39,28 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# prisma
+/app/generated/prisma
+/prisma/generated
+
+# editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# os
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ai coding tools (local, regenerable)
+.claude/
+.windsurf/
+.agents/
+skills-lock.json
+
+pathologival-lootorary12345
+
+prd.md
